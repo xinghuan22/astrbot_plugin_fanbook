@@ -25,6 +25,13 @@ class MyPlugin(Star):
         message_chain = event.get_messages() # 用户所发的消息的消息链 # from astrbot.api.message_components import *
         logger.info(message_chain)
         
+        # 去除消息头尾空格
+        message_str = message_str.strip()
+        # 解析消息是不是纯数字
+        if not message_str.isdigit():
+            yield event.plain_result(f"未找到有效本子") # 发送一条纯文本消息
+            return
+        
         # 记录开始时间
         start_time = time.time()
         yield event.plain_result(f"Hello, {user_name}, 正在初始化下载任务，请稍等...") # 发送一条纯文本消息

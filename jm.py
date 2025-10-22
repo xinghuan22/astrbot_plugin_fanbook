@@ -1,10 +1,8 @@
-from calendar import c
 from jmcomic import download_album, create_option_by_file
 import os
 from astrbot.core.star.context import Context
 from astrbot.api.event import MessageChain
 import img2pdf
-import shutil
 
 def webp_to_pdf(folder_name, output_pdf):
     # 获取所有webp图片并按名称排序
@@ -50,9 +48,6 @@ def cb(album, downloader, save_path, progress_callback):
         # 转换webp图片为PDF，并获取文件数量
         if not os.path.exists(pdf_path):
             webp_to_pdf(folder_name=download_folder, output_pdf=pdf_path)
-        
-        # 删除原始图片目录
-        # shutil.rmtree(album.name)
         
         # 返回PDF文件路径和文件数量
         return pdf_path, file_count
