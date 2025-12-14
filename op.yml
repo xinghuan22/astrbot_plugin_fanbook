@@ -1,7 +1,7 @@
 client:
   cache: null
   domain: []
-  impl: html
+  impl: api
   postman:
     meta_data:
       headers: null
@@ -9,6 +9,8 @@ client:
       proxies:
         http: ""
         https: ""
+      cookies: 
+        AVS: 1vcrnk802afagumgsbnue1paag
   retry_times: 3
 dir_rule:
   base_dir: /AstrBot/data/plugins_data/astrbot_plugin_fanbook

@@ -24,8 +24,11 @@ class MyPlugin(Star):
         message_str = event.message_str # 用户发的纯文本消息字符串
         message_chain = event.get_messages() # 用户所发的消息的消息链 # from astrbot.api.message_components import *
         logger.info(message_chain)
+        logger.info(message_str)
         
-        # 去除消息头尾空格
+        # 去除消息开头的command前缀
+        if message_str.startswith("jm"):
+            message_str = message_str[2:]
         message_str = message_str.strip()
         # 解析消息是不是纯数字
         if not message_str.isdigit():
