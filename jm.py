@@ -175,11 +175,6 @@ async def getgraph(
             except Exception as e:
                 # 其他错误直接抛出
                 raise e
-        response = await telegraph.create_page(
-            id,
-            html_content=html_content,
-        )
-
         res.append(response["url"].replace(".ph", ".kissnab.top"))
         html_content = f"<p>{albume_name}</p>"
 
