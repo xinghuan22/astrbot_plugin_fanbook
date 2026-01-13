@@ -61,7 +61,7 @@ class FanqieHex(ImageWorkflow):
                 # 填回
                 result_flat[indices_in_path] = shifted_pixels
                 res_img = Image.fromarray(result_flat.reshape(height, width, 4))
-                logger.info("添加 kissnab 水印...")
+                logger.info("添加水印...")
                 import secrets
 
                 ramtxt = secrets.token_hex(10)
