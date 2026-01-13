@@ -1,14 +1,13 @@
 import os
 import time
 
-from tools.image_hex.fanqiehex import FanqieHex
-
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, register
 
 from .jm import JmDownload, jmToph
+from .tools.image_hex.fanqiehex import FanqieHex
 
 
 @register(
@@ -151,24 +150,52 @@ class MyPlugin(Star):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
 
     # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/jm helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
-    @filter.command("番茄混淆")
+    @filter.regex(r"^(番茄混淆)", priority=5)
     async def fanqie_encrypt(
         self, event: AstrMessageEvent
     ):  # 这是 handler 的描述，将会被解析方便用户了解插件内容。建议填写。
         hex = FanqieHex()
-        img = FanqieHex.process(hex, event, "encrypt")
+        img = await FanqieHex.process(hex, event, "encrypt")
         if img:
-            yield event.chain_result([Comp.Image.fromBytes(img)])
+            yield event.chain_result(
+                [
+                    Comp.Nodes(
+                        [
+                            Comp.Node(
+                                uin="0",
+                                name="hex",
+                                content=[Comp.Image.fromBytes(byte=img)],
+                            )
+                        ]
+                    )
+                ]
+            )
         else:
             yield event.chain_result([Comp.Plain("未找到图片。")])
 
         event.stop_event()
 
-    @filter.command(command_name="番茄解混淆")
+    @filter.regex(r"^(番茄解混淆)", priority=5)
     async def decrypt(self, event: AstrMessageEvent):
+        logger.info("开始解析图片")
         hex = FanqieHex()
-        img = FanqieHex.process(hex, event, "decrypt")
+        img = await FanqieHex.process(hex, event, "decrypt")
+        # logger.info(f"图片 {img}")
         if img:
-            yield event.chain_result([Comp.Image.fromBytes(img)])
+            yield event.chain_result(
+                [
+                    Comp.Nodes(
+                        [
+                            Comp.Node(
+                                uin="0",
+                                name="hex",
+                                content=[Comp.Image.fromBytes(byte=img)],
+                            )
+                        ]
+                    )
+                ]
+            )
         else:
             yield event.chain_result([Comp.Plain("未找到图片。")])
+
+        event.stop_event()
