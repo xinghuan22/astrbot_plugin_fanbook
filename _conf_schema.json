@@ -1,0 +1,14 @@
+{
+    "iqdb_use_proxy": {
+        "description": "IQDB 是否使用代理",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，IQDB 会话初始化、搜图和缩略图下载都通过下方代理地址访问"
+    },
+    "iqdb_proxy": {
+        "description": "IQDB 代理地址",
+        "type": "string",
+        "default": "",
+        "hint": "例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
+    }
+}

@@ -1,13 +1,21 @@
 import io
 import math
+import os
+import sys
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from astrbot.api import logger
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 
-from .hex import ImageWorkflow
+# 添加当前插件目录到 Python 路径
+plugin_dir = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+sys.path.append(plugin_dir)
+
+from image_workflow.workflow import ImageWorkflow  # noqa: E402
 
 
 class FanqieHex(ImageWorkflow):
@@ -65,7 +73,7 @@ class FanqieHex(ImageWorkflow):
                 import secrets
 
                 ramtxt = secrets.token_hex(10)
-                res_img = self.add_watermark(res_img, text=ramtxt)
+                res_img = self._add_watermark(res_img, text=ramtxt)
 
             # 导出
             output_buffer = io.BytesIO()
@@ -144,80 +152,3 @@ class FanqieHex(ImageWorkflow):
         else:
             self.generate2d(0, 0, 0, height, width, 0, coordinates)
         return coordinates
-
-    def add_watermark(self, img, text="kissnab"):
-        """
-        在图片右下角添加与背景色相近的微小水印
-        """
-        draw = ImageDraw.Draw(img)
-        width, height = img.size
-
-        # 1. 设置字体大小 (自适应图片高度，很小)
-        # 大约占图片高度的 1.5% 到 2%，最小 10px
-        font_size = max(10, int(height * 0.01))
-
-        try:
-            # 尝试加载常用字体，如果没有则使用默认字体
-            # Windows/Linux 路径可能不同，这里尝试加载 Arial
-            font = ImageFont.truetype("arial.ttf", font_size)
-        except OSError:
-            font = ImageFont.load_default(size=font_size)
-
-        # 2. 计算文字宽高
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
-
-        # 3. 确定位置 (右下角，留出少量边距)
-        margin = 5
-        x = width - text_w - margin
-        y = height - text_h - margin
-
-        # 边界检查，防止图片太小文字出界
-        if x < 0:
-            x = 0
-        if y < 0:
-            y = 0
-
-        # 4. 采样背景颜色以计算"相近色"
-        # 获取文字区域中心点的颜色
-        sample_x = min(width - 1, int(x + text_w / 2))
-        sample_y = min(height - 1, int(y + text_h / 2))
-
-        bg_color = img.getpixel((sample_x, sample_y))
-
-        # 提取 RGB
-        if isinstance(bg_color, int):  # 灰度图
-            r = g = b = bg_color
-            a = 255
-        elif len(bg_color) == 4:  # RGBA
-            r, g, b, a = bg_color
-        else:  # RGB
-            r, g, b = bg_color
-            a = 255
-
-        # 计算亮度 (Luminance)
-        luminance = 0.299 * r + 0.587 * g + 0.114 * b
-
-        # 5. 生成水印颜色
-        # 策略：如果背景亮，文字就稍微暗一点；如果背景暗，文字就稍微亮一点
-        # delta 控制色差大小，值越小越"隐形"
-        delta = 5
-
-        if luminance > 128:
-            # 背景亮 -> 文字微暗
-            new_r = max(0, r - delta)
-            new_g = max(0, g - delta)
-            new_b = max(0, b - delta)
-        else:
-            # 背景暗 -> 文字微亮
-            new_r = min(255, r + delta)
-            new_g = min(255, g + delta)
-            new_b = min(255, b + delta)
-
-        text_color = (new_r, new_g, new_b, int(a * 0.9))  # 稍微加点透明度融合更好
-
-        # 6. 绘制文字
-        draw.text((x, y), text, font=font, fill=text_color)
-
-        return img
