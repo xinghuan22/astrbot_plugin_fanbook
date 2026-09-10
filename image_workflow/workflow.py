@@ -47,7 +47,7 @@ class ImageWorkflow(abc.ABC):
         raw: bytes | None = None
         loop = asyncio.get_running_loop()
 
-        if Path(src).is_file():
+        if await asyncio.to_thread(Path(src).is_file):
             raw = await loop.run_in_executor(None, Path(src).read_bytes)
         elif src.startswith("http"):
             raw = await self._download_image(src)
