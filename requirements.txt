@@ -1,5 +1,5 @@
 jmcomic==2.6.10
 img2pdf==0.6.3
 telegraph[aio]==2.2.0
-httpx[http2,socks]
+aiohttp
 beautifulsoup4>=4.13.4

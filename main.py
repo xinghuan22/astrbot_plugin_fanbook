@@ -1,4 +1,3 @@
-import asyncio
 import os
 import time
 
@@ -228,52 +227,6 @@ class MyPlugin(Star):
     @filter.regex(r"^(搜图)", priority=5)
     async def iqdb_search(self, event: AstrMessageEvent):
         logger.info("开始 IQDB 反向搜图")
-        image = await self.iqdb.get_image(event)
-        if image is None:
-            yield event.plain_result("请在消息中附带一张图片")
-            event.stop_event()
-            return
-
-        image_bytes, mime_type = image
-        try:
-            results = await self.iqdb.search(image_bytes, mime_type)
-        except Exception as exc:
-            logger.exception(f"IQDB 搜图失败: {exc}")
-            yield event.plain_result(f"IQDB 搜图失败: {exc}")
-            event.stop_event()
-            return
-
-        if not results:
-            yield event.plain_result("未找到相似度超过 30% 的结果")
-            event.stop_event()
-            return
-
-        thumbnails = await asyncio.gather(
-            *(self.iqdb.download_thumbnail(result.thumbnail_url) for result in results)
-        )
-        nodes = []
-        for result, thumbnail in zip(results, thumbnails):
-            content: list[Comp.BaseMessageComponent] = []
-            if thumbnail:
-                content.append(Comp.Image.fromBytes(byte=thumbnail))
-            content.append(Comp.Plain(f"匹配类型：{result.match_type}\n"))
-            content.append(Comp.Plain(f"来源：{' / '.join(result.sources)}\n"))
-            content.append(Comp.Plain(f"相似度：{result.similarity:g}%\n"))
-            for source, url in result.source_urls.items():
-                content.append(Comp.Plain(f"{source}：{url}\n"))
-            if result.dimensions:
-                content.append(Comp.Plain(f"尺寸：{result.dimensions}\n"))
-            if result.rating:
-                content.append(Comp.Plain(f"Rating：{result.rating}\n"))
-            if result.tags:
-                content.append(Comp.Plain(f"Tags：{result.tags}"))
-            nodes.append(
-                Comp.Node(
-                    content=content,
-                    uin=event.get_self_id() or "0",
-                    name="IQDB 搜图",
-                )
-            )
-
-        yield event.chain_result([Comp.Nodes(nodes=nodes)])
+        async for result in self.iqdb.process(event):
+            yield result
         event.stop_event()

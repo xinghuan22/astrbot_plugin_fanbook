@@ -4,9 +4,9 @@ import mimetypes
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
 
-import httpx
+import aiohttp
 from bs4 import BeautifulSoup, Tag
 
 import astrbot.api.message_components as Comp
@@ -42,10 +42,16 @@ class IQDBClient:
         "zerochan.net": "Zerochan",
         "yande.re": "Yande.re",
     }
+    SOURCE_HOST_REPLACEMENTS = {
+        "danbooru.donmai.us": "danbooru.kissnab.top",
+        "gelbooru.com": "gelbooru.kissnab.top",
+        "yande.re": "yandere.kissnab.top",
+        "konachan.com": "konachan.kissnab.top",
+    }
 
     def __init__(self, proxy: str | None = None) -> None:
         self.proxy = proxy.strip() if proxy else None
-        self.client = httpx.AsyncClient(
+        self.client = aiohttp.ClientSession(
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -54,9 +60,7 @@ class IQDBClient:
                 ),
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             },
-            timeout=httpx.Timeout(60, connect=15),
-            follow_redirects=True,
-            proxy=self.proxy,
+            timeout=aiohttp.ClientTimeout(total=60, connect=15),
         )
         self._init_lock = asyncio.Lock()
         self._initialized = False
@@ -67,12 +71,12 @@ class IQDBClient:
             if self._initialized and not force:
                 return
             if force:
-                self.client.cookies.clear()
+                self.client.cookie_jar.clear()
             response = await self._request_with_network_retry(
                 "GET", self.BASE_URL, headers={"Referer": self.BASE_URL}
             )
             response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(await response.text(), "html.parser")
             discovered = tuple(
                 dict.fromkeys(
                     str(item.get("value"))
@@ -83,7 +87,9 @@ class IQDBClient:
             if discovered:
                 self.services = discovered
             self._initialized = True
-            has_cookie = "iqdb_bcc" in self.client.cookies
+            has_cookie = any(
+                cookie.key == "iqdb_bcc" for cookie in self.client.cookie_jar
+            )
             logger.info(
                 f"IQDB 会话初始化完成，Cookie={'有效' if has_cookie else '未下发'}，"
                 f"服务编号={','.join(self.services)}，"
@@ -91,18 +97,99 @@ class IQDBClient:
             )
 
     async def ensure_session(self) -> None:
-        if not self._initialized or "iqdb_bcc" not in self.client.cookies:
+        has_cookie = any(
+            cookie.key == "iqdb_bcc" for cookie in self.client.cookie_jar
+        )
+        if not self._initialized or not has_cookie:
             await self.init_session(force=True)
 
     async def close(self) -> None:
-        await self.client.aclose()
+        if not self.client.closed:
+            await self.client.close()
+
+    async def process(self, event: AstrMessageEvent):
+        """处理一次完整的 IQDB 搜图请求并生成 AstrBot 消息结果。"""
+        image = await self.get_image(event)
+        if image is None:
+            yield event.plain_result("请在消息中附带一张图片")
+            return
+
+        image_bytes, mime_type = image
+        try:
+            results = await self.search(image_bytes, mime_type)
+        except Exception as exc:
+            logger.exception(f"IQDB 搜图失败: {exc}")
+            yield event.plain_result(f"IQDB 搜图失败: {exc}")
+            return
+
+        if not results:
+            yield event.plain_result("未找到相似度超过 30% 的结果")
+            return
+
+        thumbnails = await asyncio.gather(
+            *(self.download_thumbnail(result.thumbnail_url) for result in results)
+        )
+        nodes = [
+            self._build_result_node(event, result, thumbnail)
+            for result, thumbnail in zip(results, thumbnails)
+        ]
+        yield event.chain_result([Comp.Nodes(nodes=nodes)])
+
+    @classmethod
+    def _build_result_node(
+        cls,
+        event: AstrMessageEvent,
+        result: IQDBResult,
+        thumbnail: bytes | None,
+    ) -> Comp.Node:
+        content: list[Comp.BaseMessageComponent] = []
+        if thumbnail:
+            content.append(Comp.Image.fromBytes(byte=thumbnail))
+        content.append(Comp.Plain(f"匹配类型：{result.match_type}\n"))
+        content.append(Comp.Plain(f"来源：{' / '.join(result.sources)}\n"))
+        content.append(Comp.Plain(f"相似度：{result.similarity:g}%\n"))
+        for source, url in result.source_urls.items():
+            content.append(Comp.Plain(f"{source}：{cls.replace_source_host(url)}\n"))
+        if result.dimensions:
+            content.append(Comp.Plain(f"尺寸：{result.dimensions}\n"))
+        if result.rating:
+            content.append(Comp.Plain(f"Rating：{result.rating}\n"))
+        if result.tags:
+            content.append(Comp.Plain(f"Tags：{result.tags}"))
+        return Comp.Node(
+            content=content,
+            uin=event.get_self_id() or "0",
+            name="IQDB 搜图",
+        )
+
+    @classmethod
+    def replace_source_host(cls, url: str) -> str:
+        """将支持的图源链接切换到对应的反代域名。"""
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower().removeprefix("www.")
+        replacement = cls.SOURCE_HOST_REPLACEMENTS.get(host)
+        if not replacement:
+            return url
+        return urlunsplit(parsed._replace(netloc=replacement))
 
     async def _request_with_network_retry(self, method: str, url: str, **kwargs):
+        data_factory = kwargs.pop("data_factory", None)
         last_error: Exception | None = None
         for attempt in range(2):
             try:
-                return await self.client.request(method, url, **kwargs)
-            except httpx.HTTPError as exc:
+                request_kwargs = kwargs.copy()
+                if data_factory:
+                    request_kwargs["data"] = data_factory()
+                async with self.client.request(
+                    method,
+                    url,
+                    proxy=self.proxy,
+                    allow_redirects=True,
+                    **request_kwargs,
+                ) as response:
+                    await response.read()
+                    return response
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 last_error = exc
                 if attempt == 0:
                     logger.warning(f"IQDB 网络请求失败，将重试一次: {exc}")
@@ -116,8 +203,7 @@ class IQDBClient:
         return urljoin(IQDBClient.BASE_URL, url)
 
     @staticmethod
-    def _is_search_result_page(response: httpx.Response) -> bool:
-        html = response.text
+    def _is_search_result_page(response: aiohttp.ClientResponse, html: str) -> bool:
         lowered = html.lower()
         if any(
             marker in lowered
@@ -154,32 +240,44 @@ class IQDBClient:
             raise ValueError("图片超过 20MB，无法搜索")
         await self.ensure_session()
         extension = mimetypes.guess_extension(mime_type) or ".img"
-        data = {"service[]": list(self.services)}
         headers = {"Referer": self.BASE_URL, "Origin": "https://iqdb.org"}
+
+        def build_form() -> aiohttp.FormData:
+            form = aiohttp.FormData()
+            for service in self.services:
+                form.add_field("service[]", service)
+            form.add_field(
+                "file",
+                image,
+                filename=f"{filename}{extension}",
+                content_type=mime_type,
+            )
+            return form
 
         for attempt in range(2):
             response = await self._request_with_network_retry(
                 "POST",
                 self.BASE_URL,
                 headers=headers,
-                data=data,
-                files={"file": (f"{filename}{extension}", image, mime_type)},
+                data_factory=build_form,
             )
-            if self._is_search_result_page(response):
+            html = await response.text()
+            if self._is_search_result_page(response, html):
                 response.raise_for_status()
-                return self.parse_results(response.text)
+                return self.parse_results(html)
             if attempt == 0:
                 logger.warning("IQDB Cookie 或结果页异常，正在静默刷新会话并重试")
                 await self.init_session(force=True)
                 continue
             response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(html, "html.parser")
             title = soup.title.get_text(" ", strip=True) if soup.title else "无标题"
             logger.error(
                 "IQDB 返回异常页面: "
-                f"status={response.status_code}, url={response.url}, "
-                f"title={title!r}, bytes={len(response.content)}, "
-                f"cookies={','.join(self.client.cookies.keys()) or 'none'}"
+                f"status={response.status}, url={response.url}, "
+                f"title={title!r}, bytes={len(await response.read())}, "
+                "cookies="
+                f"{','.join(cookie.key for cookie in self.client.cookie_jar) or 'none'}"
             )
             raise RuntimeError("IQDB 返回内容不是有效的搜索结果页")
         return []
@@ -254,8 +352,8 @@ class IQDBClient:
             response.raise_for_status()
             if not response.headers.get("content-type", "").startswith("image/"):
                 return None
-            return response.content
-        except httpx.HTTPError as exc:
+            return await response.read()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             logger.warning(f"IQDB 缩略图下载失败: {exc}")
             return None
 
@@ -281,7 +379,7 @@ class IQDBClient:
                 if source.startswith("http"):
                     response = await self._request_with_network_retry("GET", source)
                     response.raise_for_status()
-                    raw = response.content
+                    raw = await response.read()
                     mime = response.headers.get("content-type", "").split(";", 1)[0]
                     return (
                         raw,
@@ -292,7 +390,12 @@ class IQDBClient:
                 if await asyncio.to_thread(path.is_file):
                     raw = await asyncio.to_thread(path.read_bytes)
                     return raw, self.detect_mime(raw)
-            except (OSError, ValueError, httpx.HTTPError) as exc:
+            except (
+                OSError,
+                ValueError,
+                aiohttp.ClientError,
+                asyncio.TimeoutError,
+            ) as exc:
                 logger.warning(f"读取待搜索图片失败: {exc}")
         return None
 

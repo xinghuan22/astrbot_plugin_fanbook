@@ -1,10 +1,11 @@
+import asyncio
 import io
 import os
 import re
 import sys
 from typing import Any
 
-import httpx
+import aiohttp
 
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
@@ -21,11 +22,6 @@ class SoutuBotClient(ImageWorkflow):
     def __init__(self):
         self.base_url = "https://soutubot.moe"
         self.search_api = f"{self.base_url}/api/search"
-        self.client = httpx.AsyncClient(
-            http2=True,
-            timeout=httpx.Timeout(60.0),
-            follow_redirects=True,
-        )
         self.headers = {
             "Accept": "application/json",
             "User-Agent": (
@@ -51,18 +47,31 @@ class SoutuBotClient(ImageWorkflow):
         :param filename: 虚拟文件名
         :return: 搜图接口 JSON 响应
         """
-        data = {"factor": "1.2", "metadata_mode": "display", "top_k": "25"}
-        files = {"file": (filename, image_bytes, "image/jpeg")}
+        form = aiohttp.FormData()
+        form.add_field("factor", "1.2")
+        form.add_field("metadata_mode", "display")
+        form.add_field("top_k", "25")
+        form.add_field(
+            "file",
+            image_bytes,
+            filename=filename,
+            content_type="image/jpeg",
+        )
         try:
-            response = await self.client.post(
-                self.search_api, headers=self.headers, data=data, files=files
-            )
-            response.raise_for_status()
-            payload = response.json()
+            async with self.session.post(
+                self.search_api,
+                headers=self.headers,
+                data=form,
+                proxy=self.proxy,
+                timeout=aiohttp.ClientTimeout(total=60),
+                allow_redirects=True,
+            ) as response:
+                response.raise_for_status()
+                payload = await response.json(content_type=None)
             if payload.get("status") != "ok":
                 raise ValueError(payload.get("error") or "接口返回非成功状态")
             return payload
-        except (httpx.HTTPError, ValueError) as exc:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
             logger.error(f"搜图请求失败: {exc}")
             raise RuntimeError(str(exc)) from exc
 
@@ -97,10 +106,6 @@ class SoutuBotClient(ImageWorkflow):
         }
 
     async def terminate(self):
-        # 关闭 httpx
-        if self.client and not self.client.is_closed:
-            await self.client.aclose()
-        # 关闭父类 ImageWorkflow 的 aiohttp
         await super().terminate()
 
     async def _download_preview(self, url: str) -> bytes | None:
