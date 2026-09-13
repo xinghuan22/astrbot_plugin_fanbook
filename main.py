@@ -26,7 +26,13 @@ class MyPlugin(Star):
         proxy = str(config.get("iqdb_proxy", "")).strip() if use_proxy else ""
         if use_proxy and not proxy:
             logger.warning("IQDB 已开启代理，但代理地址为空，将使用直连")
-        self.iqdb = IQDBClient(proxy=proxy or None)
+        gateway_base_url = str(
+            config.get("image_gateway_url") or "https://image.lospro.kissnab.top"
+        ).strip()
+        self.iqdb = IQDBClient(
+            proxy=proxy or None,
+            gateway_base_url=gateway_base_url,
+        )
 
     async def initialize(self):
         """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""

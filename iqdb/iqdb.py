@@ -4,7 +4,7 @@ import mimetypes
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
+from urllib.parse import urlencode, urljoin, urlparse, urlsplit
 
 import aiohttp
 from bs4 import BeautifulSoup, Tag
@@ -42,15 +42,23 @@ class IQDBClient:
         "zerochan.net": "Zerochan",
         "yande.re": "Yande.re",
     }
-    SOURCE_HOST_REPLACEMENTS = {
-        "danbooru.donmai.us": "danbooru.kissnab.top",
-        "gelbooru.com": "gelbooru.kissnab.top",
-        "yande.re": "yandere.kissnab.top",
-        "konachan.com": "konachan.kissnab.top",
+    GATEWAY_SOURCE_HOSTS = {
+        "danbooru.donmai.us",
+        "gelbooru.com",
+        "yande.re",
+        "konachan.com",
     }
 
-    def __init__(self, proxy: str | None = None) -> None:
+    def __init__(
+        self,
+        proxy: str | None = None,
+        gateway_base_url: str = "https://image.lospro.kissnab.top",
+    ) -> None:
         self.proxy = proxy.strip() if proxy else None
+        self.gateway_base_url = gateway_base_url.strip().rstrip("/")
+        gateway = urlsplit(self.gateway_base_url)
+        if gateway.scheme not in {"http", "https"} or not gateway.netloc:
+            raise ValueError("image_gateway_url 必须是有效的 HTTP(S) 地址")
         self.client = aiohttp.ClientSession(
             headers={
                 "User-Agent": (
@@ -135,9 +143,8 @@ class IQDBClient:
         ]
         yield event.chain_result([Comp.Nodes(nodes=nodes)])
 
-    @classmethod
     def _build_result_node(
-        cls,
+        self,
         event: AstrMessageEvent,
         result: IQDBResult,
         thumbnail: bytes | None,
@@ -149,7 +156,7 @@ class IQDBClient:
         content.append(Comp.Plain(f"来源：{' / '.join(result.sources)}\n"))
         content.append(Comp.Plain(f"相似度：{result.similarity:g}%\n"))
         for source, url in result.source_urls.items():
-            content.append(Comp.Plain(f"{source}：{cls.replace_source_host(url)}\n"))
+            content.append(Comp.Plain(f"{source}：{self.replace_source_host(url)}\n"))
         if result.dimensions:
             content.append(Comp.Plain(f"尺寸：{result.dimensions}\n"))
         if result.rating:
@@ -162,15 +169,13 @@ class IQDBClient:
             name="IQDB 搜图",
         )
 
-    @classmethod
-    def replace_source_host(cls, url: str) -> str:
-        """将支持的图源链接切换到对应的反代域名。"""
+    def replace_source_host(self, url: str) -> str:
+        """将支持的作品链接转换为 image-gateway 查看地址。"""
         parsed = urlsplit(url)
         host = (parsed.hostname or "").lower().removeprefix("www.")
-        replacement = cls.SOURCE_HOST_REPLACEMENTS.get(host)
-        if not replacement:
+        if host not in self.GATEWAY_SOURCE_HOSTS:
             return url
-        return urlunsplit(parsed._replace(netloc=replacement))
+        return f"{self.gateway_base_url}/view?{urlencode({'url': url})}"
 
     async def _request_with_network_retry(self, method: str, url: str, **kwargs):
         data_factory = kwargs.pop("data_factory", None)

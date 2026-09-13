@@ -10,5 +10,11 @@
         "type": "string",
         "default": "",
         "hint": "例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
+    },
+    "image_gateway_url": {
+        "description": "图片结果页面地址",
+        "type": "string",
+        "default": "https://image.lospro.kissnab.top",
+        "hint": "支持的 IQDB 图源会转换为此服务的 /view?url= 地址"
     }
 }
