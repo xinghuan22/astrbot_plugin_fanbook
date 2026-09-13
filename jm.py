@@ -1,9 +1,17 @@
 import asyncio
+import hashlib
+import hmac
+import json
 import os
+import secrets
+import time
+
+import aiohttp
 
 import img2pdf
 from jmcomic import (
     JmImageDetail,
+    JmImageTool,
     create_option_by_file,
     download_album,
     multi_thread_launcher,
@@ -11,6 +19,87 @@ from jmcomic import (
 from telegraph.aio import RetryAfterError, Telegraph
 
 from astrbot.api import logger
+
+
+def _as_strings(value):
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return [str(part).strip() for part in value if str(part).strip()]
+
+
+async def publish_jm_reader(
+    album_id: str, config_path: str, gateway_base_url: str, publish_secret: str
+) -> str:
+    if len(publish_secret) < 32:
+        raise ValueError("请在插件配置中填写至少 32 个字符的漫画发布密钥")
+
+    def build_manifest():
+        option = create_option_by_file(config_path)
+        client = option.new_jm_client()
+        album = client.get_album_detail(album_id)
+        chapters = []
+        for order, chapter_ref in enumerate(album, start=1):
+            photo = client.get_photo_detail(chapter_ref.photo_id, False)
+            pages = []
+            for index, image in enumerate(photo, start=1):
+                source_url = getattr(image, "download_url", None) or image.img_url
+                segments = int(JmImageTool.get_num_by_detail(image))
+                pages.append(
+                    {
+                        "index": index,
+                        "source_url": source_url,
+                        "file_name": str(image.img_file_name),
+                        "decode": {
+                            "scheme": "jm_vertical_v1" if segments else "",
+                            "segments": segments,
+                        },
+                    }
+                )
+            chapters.append(
+                {
+                    "id": str(photo.photo_id),
+                    "title": str(getattr(photo, "name", "") or f"章节 {order}"),
+                    "order": order,
+                    "pages": pages,
+                }
+            )
+        return {
+            "provider": "jm",
+            "album_id": str(album.id),
+            "title": str(album.name),
+            "authors": _as_strings(getattr(album, "authors", [])),
+            "description": str(getattr(album, "description", "") or ""),
+            "chapters": chapters,
+            "updated_at": int(time.time()),
+        }
+
+    manifest = await asyncio.to_thread(build_manifest)
+    body = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode()
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_hex(16)
+    body_hash = hashlib.sha256(body).hexdigest()
+    signature = hmac.new(
+        publish_secret.encode(),
+        f"{timestamp}\n{nonce}\n{body_hash}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    endpoint = gateway_base_url.rstrip("/") + "/api/manga/publish"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Manga-Timestamp": timestamp,
+        "X-Manga-Nonce": nonce,
+        "X-Manga-Signature": signature,
+    }
+    timeout = aiohttp.ClientTimeout(total=180)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(endpoint, data=body, headers=headers) as response:
+            payload = await response.json(content_type=None)
+            if response.status != 200:
+                message = payload.get("error", {}).get("message", "发布失败")
+                raise RuntimeError(f"image-gateway: {message} ({response.status})")
+            return str(payload["url"])
 
 
 def webp_to_pdf(folder_name, output_pdf):

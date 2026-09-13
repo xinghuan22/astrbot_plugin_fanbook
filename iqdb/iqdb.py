@@ -135,7 +135,7 @@ class IQDBClient:
             return
 
         thumbnails = await asyncio.gather(
-            *(self.download_thumbnail(result.thumbnail_url) for result in results)
+            *(self.download_result_thumbnail(result) for result in results)
         )
         nodes = [
             self._build_result_node(event, result, thumbnail)
@@ -349,18 +349,62 @@ class IQDBClient:
             reverse=True,
         )
 
-    async def download_thumbnail(self, url: str) -> bytes | None:
+    async def download_thumbnail(
+        self, url: str, referer: str | None = None, label: str = "IQDB"
+    ) -> bytes | None:
         try:
             response = await self._request_with_network_retry(
-                "GET", url, headers={"Referer": self.BASE_URL}
+                "GET", url, headers={"Referer": referer or self.BASE_URL}
             )
             response.raise_for_status()
-            if not response.headers.get("content-type", "").startswith("image/"):
+            content_type = response.headers.get("content-type", "")
+            if not content_type.startswith("image/"):
+                logger.warning(
+                    f"{label} 缩略图返回非图片内容: "
+                    f"status={response.status}, content_type={content_type or 'unknown'}"
+                )
                 return None
             return await response.read()
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            logger.warning(f"IQDB 缩略图下载失败: {exc}")
+            logger.warning(f"{label} 缩略图下载失败: {exc}")
             return None
+
+    async def download_result_thumbnail(self, result: IQDBResult) -> bytes | None:
+        """支持的图站优先使用 image-gateway，其他结果使用 IQDB 缩略图。"""
+        for source_url in result.source_urls.values():
+            parsed = urlsplit(source_url)
+            host = (parsed.hostname or "").lower().removeprefix("www.")
+            if host not in self.GATEWAY_SOURCE_HOSTS:
+                continue
+            try:
+                resolve_url = (
+                    f"{self.gateway_base_url}/api/resolve?"
+                    f"{urlencode({'url': source_url})}"
+                )
+                response = await self._request_with_network_retry("GET", resolve_url)
+                response.raise_for_status()
+                post = await response.json(content_type=None)
+                site = str(post.get("site", ""))
+                post_id = str(post.get("id", ""))
+                if not site or not post_id:
+                    continue
+                variant = "preview" if post.get("preview_url") else "sample"
+                if variant == "sample" and not post.get("sample_url"):
+                    continue
+                media_url = (
+                    f"{self.gateway_base_url}/media/{site}/{post_id}/{variant}"
+                )
+                thumbnail = await self.download_thumbnail(
+                    media_url,
+                    referer=f"{self.gateway_base_url}/",
+                    label="image-gateway",
+                )
+                if thumbnail:
+                    return thumbnail
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+                logger.warning(f"image-gateway 缩略图下载失败，将回退 IQDB: {exc}")
+
+        return await self.download_thumbnail(result.thumbnail_url)
 
     async def get_image(self, event: AstrMessageEvent) -> tuple[bytes, str] | None:
         images: list[Comp.Image] = []

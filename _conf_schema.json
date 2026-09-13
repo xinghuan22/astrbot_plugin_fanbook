@@ -16,5 +16,11 @@
         "type": "string",
         "default": "https://image.lospro.kissnab.top",
         "hint": "支持的 IQDB 图源会转换为此服务的 /view?url= 地址"
+    },
+    "manga_publish_secret": {
+        "description": "漫画发布密钥",
+        "type": "string",
+        "default": "",
+        "hint": "须与 image-gateway 的 MANGA_PUBLISH_SECRET 完全相同，至少 32 个字符"
     }
 }

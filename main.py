@@ -8,7 +8,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core import AstrBotConfig
 
 from .iqdb import IQDBClient
-from .jm import JmDownload, jmToph
+from .jm import JmDownload, publish_jm_reader
 from .soutubot.soutubot import get_soutu_client
 from .tools.image_hex.fanqiehex import FanqieHex
 
@@ -138,17 +138,21 @@ class MyPlugin(Star):
                 config_path = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)), "op.yml"
                 )
-                result = await jmToph(message_str, config_path)
-                node_list = []
-                for res in result:
-                    node_list.append(
-                        Comp.Node(
-                            uin="0",
-                            name="jm",
-                            content=[Comp.Plain(text=res)],
-                        )
+                try:
+                    gateway_url = str(
+                        self.config.get("image_gateway_url")
+                        or "https://image.lospro.kissnab.top"
+                    ).strip()
+                    publish_secret = str(
+                        self.config.get("manga_publish_secret") or ""
+                    ).strip()
+                    reader_url = await publish_jm_reader(
+                        message_str, config_path, gateway_url, publish_secret
                     )
-                yield event.chain_result([Comp.Nodes(nodes=node_list)])
+                    yield event.plain_result(reader_url)
+                except Exception as exc:
+                    logger.error(f"漫画阅读页生成失败: {exc}")
+                    yield event.plain_result(f"漫画阅读页生成失败: {exc}")
 
         event.stop_event()
 
