@@ -95,10 +95,26 @@ async def publish_jm_reader(
     timeout = aiohttp.ClientTimeout(total=180)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post(endpoint, data=body, headers=headers) as response:
-            payload = await response.json(content_type=None)
+            response_text = await response.text()
+            try:
+                payload = json.loads(response_text)
+            except (json.JSONDecodeError, TypeError):
+                payload = None
             if response.status != 200:
-                message = payload.get("error", {}).get("message", "发布失败")
+                message = "发布失败"
+                if isinstance(payload, dict):
+                    error = payload.get("error")
+                    if isinstance(error, dict):
+                        message = str(error.get("message") or message)
+                elif response_text.strip():
+                    # 不记录完整响应，避免网关错误页或上游信息污染日志。
+                    message = response_text.strip().replace("\n", " ")[:200]
                 raise RuntimeError(f"image-gateway: {message} ({response.status})")
+            if not isinstance(payload, dict) or not payload.get("url"):
+                raise RuntimeError(
+                    f"image-gateway 返回格式错误 ({response.status}, "
+                    f"Content-Type: {response.headers.get('Content-Type', 'unknown')})"
+                )
             return str(payload["url"])
 
 

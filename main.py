@@ -43,6 +43,7 @@ class MyPlugin(Star):
             logger.warning(f"IQDB 启动会话初始化失败，将在搜索时重试: {exc}")
 
     @filter.command("jm")
+    @filter.command("JM")
     async def jm(self, event: AstrMessageEvent):
         # user_name = event.get_sender_name()
         message_str = event.message_str  # 用户发的纯文本消息字符串
@@ -53,7 +54,7 @@ class MyPlugin(Star):
         logger.info(message_str)
 
         # 去除消息开头的command前缀
-        if message_str.startswith("jm"):
+        if message_str[:2].lower() == "jm":
             message_str = message_str[2:].strip()
         # 根据空格分隔消息
         send_type = "url"
@@ -62,8 +63,8 @@ class MyPlugin(Star):
             yield event.plain_result("未找到有效本子id。")  # 发送一条纯文本消息
             return
         message_str = message_strs[0]
-        if len(message_strs) >= 2 and message_strs[1] in ["file", "url"]:
-            send_type = message_strs[1]
+        if len(message_strs) >= 2 and message_strs[1].lower() in ["file", "url"]:
+            send_type = message_strs[1].lower()
         # 解析消息是不是纯数字
         if not message_str.isdigit():
             yield event.plain_result("id不是纯数字呢！")  # 发送一条纯文本消息
